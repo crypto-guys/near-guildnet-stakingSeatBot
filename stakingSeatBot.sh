@@ -1,8 +1,6 @@
 #!/bin/bash
 
 # This script will manage your validators stake.
-
-
 #############################################
 #                                           #
 #  Enter your information in this section   #
@@ -10,18 +8,20 @@
 #############################################
 # Only guildnet has been tested
 NETWORK="guildnet"
+
 # Example "beastake.stake.guildnet"
-POOL_ID="stakeu.stake.guildnet"
-ACCOUNT_ID="imstaked.guildnet"
+POOL_ID="pool.stake.guildnet"
+ACCOUNT_ID="accountId.guildnet"
+
 # Enter a NUMBER
 NUM_SEATS_TO_OCCUPY=10
+SEAT_PRICE_BUFFER=20000
+
 # Set Enable Email to 1 to enable email notifications and fill in the blanks
 ENABLE_EMAIL=1
-FROM_ADDRESS=admin@crypto-solutions.net
-TO_ADDRESS=notifications@crypto-solutions.net
-# Number of missed blocks before an email is sent
-ALERT_MISSING_BLOCKS=10
-SEAT_PRICE_BUFFER=20000
+FROM_ADDRESS=<EMAIL_ADDR_AUTHORIZED_TO_SEND>
+TO_ADDRESS=<DESTINATION_ADDR>
+
 # Enable More Verbose Output
 DEBUG_MIN=0
 
@@ -64,21 +64,17 @@ case $NETWORK in
     ;;
 esac
 
-
-
 echo "Starting Script"
 echo "---------------"
-
 # Ensure user has configured the script
-if [ "$POOL_ID" == "pool.stake.guildnet" ] && [ "$DEBUG_ALL" == "1" ]
+if [ "$POOL_ID" = "pool.stake.guildnet" ]
 then
-echo "You have not properly configured this script. Please edit the file and replace every instance of ??? with valid data"
-exit
-fi
-
-if [ "$DEBUG_MIN" == "1" ]
+  echo "You have not properly configured this script. Please make sure you have configured your accountId and poolId"
+  exit
+fi  
+if [ "$POOL_ID" != "pool.stake.guildnet" ] && [ "$DEBUG_MIN" == "1" ]
 then
-echo "The script is configured"
+  echo "The script is configured"
 fi
 
 PUBLIC_KEY=$(near view "$POOL_ID" get_staking_key {} | tail -n 1)
@@ -86,28 +82,31 @@ PUBLIC_KEY=$(near view "$POOL_ID" get_staking_key {} | tail -n 1)
 #then
 #  echo 'The public key for $POOL_ID is: $PUBLIC_KEY'
 #else
-#if [ "$DEBUG_MIN" == "1" ]
-#then
-#  echo "We have the key"
-#fi
+if [ "$DEBUG_MIN" == "1" ]
+then
+  echo "We have the public key for $POOL_ID"
+fi
 
 VALIDATORS=$(curl -s -d '{"jsonrpc": "2.0", "method": "validators", "id": "dontcare", "params": [null]}' -H 'Content-Type: application/json' $HOST )
-if [ "$DEBUG_ALL" == "1" ]
+if [ "$VALIDATORS" ] && [ "$DEBUG_ALL" == "1" ]
 then
   echo "Validators: $VALIDATORS"
 fi
-if [ "$DEBUG_MIN" == "1" ]
+if [ "$VALIDATORS" ] && [ "$DEBUG_MIN" == "1" ]
 then
   echo "Validator Info Received"
 fi
 
 STATUS_VAR="/status"
 STATUS=$(curl -s "$HOST$STATUS_VAR")
-if [ "$DEBUG_ALL" == "1" ]
+if [ $STATUS ] && [ "$DEBUG_ALL" == "1" ]
 then
   echo "STATUS: $STATUS"
 fi
-
+if [ $STATUS ] && [ "$DEBUG_MIN" == "1" ]
+then
+  echo "RPC /status response recieved"
+fi
 
 EPOCH_START=$(echo "$VALIDATORS" | jq .result.epoch_start_height)
 if [ "$DEBUG_MIN" == "1" ]
@@ -258,62 +257,60 @@ PRODUCED_BLOCKS=$(curl -s -d '{"jsonrpc": "2.0", "method": "validators", "id": "
 EXPECTED_BLOCKS=$(curl -s -d '{"jsonrpc": "2.0", "method": "validators", "id": "dontcare", "params": [null]}' -H 'Content-Type: application/json' "$HOST" | jq -c ".result.current_validators[] | select(.account_id | contains (\"$POOL_ID\"))" | jq .num_expected_blocks)
 BLOCKS_MISSED=$((EXPECTED_BLOCKS - PRODUCED_BLOCKS))
 
+# Kicked Info
+KICK_REASON=$(echo "$VALIDATORS" | jq -c ".result.prev_epoch_kickout[] | select(.account_id | contains (\"$POOL_ID\"))" | jq .reason)
+KICKED_EMAIL=$(echo "<strong> The validator $POOL_ID has been kicked for $KICK_REASON <strong><br>Action Taken:  A new proposal has been submitted.<br>Produced: $PRODUCED_BLOCKS<br>Blocks Missed: $BLOCKS_MISSED<br>Latest Seat Price: $SEAT_PRICE_PROPOSALS<br>Validators Stake: $PROPOSAL_STAKE")
+
 function send_email_notify
 {
     PREVIOUS_MISSED=$(cat "$CURRENTDIR"/email_counter.txt)
     COUNTER=$((BLOCKS_MISSED - PREVIOUS_MISSED))
-    if [ "$ENABLE_EMAIL" = 1 ] && [ "$COUNTER" -gt "$ALERT_MISSING_BLOCKS" ]
+    if [ "$ENABLE_EMAIL" = 1 ]
     then
-    mail -s "NEAR Monitor: '$POOL_ID'" -a From:Admin\<$FROM_ADDRESS\> --return-address=$FROM_ADDRESS $TO_ADDRESS <<< 'Pool is Missing Blocks!!  
-    Expected: '$EXPECTED_BLOCKS'
-    Produced: '$PRODUCED_BLOCKS'
-    Blocks Missed: '$BLOCKS_MISSED'
-    Alert Trigger: '$ALERT_MISSING_BLOCKS' Missing Blocks'
-       echo "$BLOCKS_MISSED" > "$CURRENTDIR"/email_counter.txt
-    fi
-    if [ "$ENABLE_EMAIL" = 0 ] && [ "$DEBUG_ALL" = 1 ]
-    then
-      echo "email alerts are disabled"
+      if [ "$COUNTER" -gt "$EMAILS_PER_EPOCH" ] || [ -z "$COUNTER" ]
+      then
+        mail -s "NEAR Monitor: '$POOL_ID'" -a From:Admin\<$FROM_ADDRESS\> --return-address=$FROM_ADDRESS $TO_ADDRESS <<< 'Pool is Missing Blocks!!  
+        Expected: '$EXPECTED_BLOCKS'
+        Produced: '$PRODUCED_BLOCKS'
+        Blocks Missed: '$BLOCKS_MISSED'
+        Alert Trigger: '$EMAILS_PER_EPOCH' Missing Blocks'
+          echo $BLOCKS_MISSED > "$CURRENTDIR/email_counter.txt"
+      fi
+    else
+      if [ "$ENABLE_EMAIL" = 0 ] && [ "$DEBUG_ALL" = 1 ]
+      then
+        echo "email alerts are disabled"
+        echo $BLOCKS_MISSED > "$CURRENTDIR/email_counter.txt"
+      fi
     fi
 }
 
-
 # Check for missing blocks and email if over the limit
-
-#if [ $BLOCKS_MISSED = 0 ]
-#then
-#send_email_notify
-#fi
-if [ "$BLOCKS_MISSED" -gt "$ALERT_MISSING_BLOCKS" ]
+if [[ "$BLOCKS_MISSED" -gt "$EMAILS_PER_EPOCH" ]]
 then
 send_email_notify
 fi
-#if [ "$BLOCKS_MISSED" -lt "$ALERT_MISSING_BLOCKS" ]
-#then
-#send_email_notify 
-#fi
-#if [ "$BLOCKS_MISSED" = "$ALERT_MISSING_BLOCKS" ]
-#then
-#send_email_notify
-#fi
 
-KICK_REASON=$(echo "$VALIDATORS" | jq -c ".result.prev_epoch_kickout[] | select(.account_id | contains (\"$POOL_ID\"))" | jq .reason)
-KICKED_EMAIL=$(echo "<strong> The validator $POOL_ID has been kicked for $KICK_REASON <strong><br>Action Taken:  A new proposal has been submitted.<br>Produced: $PRODUCED_BLOCKS<br>Blocks Missed: $BLOCKS_MISSED<br>Latest Seat Price: $SEAT_PRICE_PROPOSALS<br>Validators Stake: $PROPOSAL_STAKE")
 function send_email_kick
 {
+  LAST_EMAIL=$(cat "$CURRENTDIR/last_kick_email.txt")
+  if [ -z "$CURRENTDIR/last_kick_email.txt" ] || [ "$LAST_EMAIL" -lt "$LAST_BLOCK" ]
+  then
     if [ "$ENABLE_EMAIL" = 1 ]
     then
-    mail -s "NEAR Monitor: $POOL_ID" -a From:Admin\<admin@crypto-solutions.net\> --return-address=admin@crypto-solutions.net notifications@crypto-solutions.net <<< 'The validator '$POOL_ID' has been kicked for '$KICK_REASON' 
-    Action Taken:  A new proposal has been submitted.
-    Produced: '$PRODUCED_BLOCKS'
-    Blocks Missed: '$BLOCKS_MISSED'
-    Latest Seat Price: '$SEAT_PRICE_PROPOSALS'
-    Validators Stake: '$PROPOSAL_STAKE''
+      mail -s "NEAR Monitor: $POOL_ID" -a From:Admin\<$FROM_ADDRESS\> --return-address="$FROM_ADDRESS" "$TO_ADDRESS" <<< 'The validator '$POOL_ID' has been kicked for '$KICK_REASON' 
+      Action Taken:  A new proposal has been submitted.
+      Produced: '$PRODUCED_BLOCKS'
+      Blocks Missed: '$BLOCKS_MISSED'
+      Latest Seat Price: '$SEAT_PRICE_PROPOSALS'
+      Validators Stake: '$PROPOSAL_STAKE''
+        echo $LAST_BLOCK > $CURRENTDIR/last_kick_email.txt
     fi
     if [ "$ENABLE_EMAIL" = 0 ] && [ "$DEBUG_ALL" = 1 ]
     then
-    echo "Email notification are disabled"
+      echo "Email notification are disabled"
     fi
+  fi
 }
 
 # Validator Kicked Check then notify
